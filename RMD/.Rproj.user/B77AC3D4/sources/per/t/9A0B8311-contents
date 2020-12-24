@@ -1,0 +1,145 @@
+library(spatstat)
+library(here)
+library(sp)
+library(rgeos)
+library(maptools)
+library(GISTools)
+library(tmap)
+library(sf)
+library(geojson)
+library(geojsonio)
+library(tmaptools)
+library(tidyverse)
+library(fs)
+library(stringr)
+library(tigris)
+library(raster)
+
+
+msoabounds <- st_read(here::here("../../bigData", 
+                                      "statistical-gis-boundaries-london", 
+                                      "ESRI", "MSOA_2011_London_gen_MHW.shp"))%>%
+  st_transform(., 27700)
+
+census <- read_csv("msoadata.csv")
+
+msoacensus <- geo_join(msoabounds,census,'MSOA11CD','MSOA11CD')
+
+
+tweet1222 <- st_read(here::here("../12221900.csv"))
+
+# change the data to spatial 
+tweet1222 <- tweet1222 %>%
+  st_as_sf(., coords = c("long", "lat"), 
+           crs = 4326)%>%
+  st_transform(., 27700)
+
+tweet1222 <- tweet1222[msoabounds,]
+
+tm_shape(msoabounds) +
+  tm_polygons(col = NA, alpha = 0.5) +
+  tm_shape(tweet1222) +
+  tm_dots(col = "blue")
+
+tweetineachward <- msoabounds%>%
+  st_join(tweet1222)%>%
+  add_count(MSOA11NM)%>%
+  #calculate area
+  mutate(area=st_area(.))%>%
+  #then density of the points per ward
+  mutate(density=n/area)%>%
+  #select density and some other variables 
+  dplyr::select(density, MSOA11NM, MSOA11CD, n)
+
+tweetineachward<- tweetineachward %>%                    
+  group_by(MSOA11CD) %>%         
+  summarise(density = first(density),
+            wardname= first(MSOA11NM),
+            plaquecount= first(n))
+
+tmap_mode("view")
+tm_shape(tweetineachward) +
+  tm_polygons("density",
+              style="jenks",
+              palette="PuOr",
+              midpoint=NA,
+              popup.vars=c("wardname", "density"),
+              title="Tweet Density")
+
+######################################
+
+tmap_mode("plot")
+tm_work <- tm_shape(msoacensus) + 
+  tm_polygons("working_pop",style = "jenks",legend.hist = TRUE) +
+  tm_layout(frame=FALSE,legend.outside = TRUE)+
+  tm_credits("(a)", position=c(0,0.85), size=1.5)
+
+tm_res <- tm_shape(msoacensus) + 
+  tm_polygons("resident_num",style = "jenks",legend.hist = TRUE) +
+  tm_layout(frame=FALSE,legend.outside = TRUE)+
+  tm_credits("(b)", position=c(0,0), size=1.5)
+
+t=tmap_arrange(tm_work, tm_res,ncol=1)
+t
+
+
+
+
+
+
+
+Joinfunm <- function(data1, data2){
+  output<- data1%>%
+    st_join(data2,.)%>%
+    add_count(MSOA11CD, name="airbnbs") 
+  return(output)
+}
+Airbnbmsoa <- Joinfunm(Airbnb, boroughsandwardssf[[3]])
+
+
+# get the length - add 1 as we are using less than
+boroughlen<-length(boroughsandwardssf)+1
+# empty list
+hold<-list()
+# here is our starting point variable
+i<-1
+
+# while i is less than boroughlength 
+# max of boroughlength is 3
+while (i < boroughlen){
+  # put the output in our varible
+  # use the function for boroughs and then wards
+  hold[[i]] <- Joinfunm(Airbnb, boroughsandwardssf[[i]])
+  # add one to the index
+  i<-i+1
+}
+
+# make a quick thematic map to have a look
+
+justairbnward<-hold[[2]]%>%
+  dplyr::select(GSS_CODE, airbnbs)%>%
+  st_drop_geometry()%>%
+  distinct(GSS_CODE, airbnbs)%>%
+  left_join(boroughsandwardssf[[2]], .,
+            by = c("GSS_CODE" = "GSS_CODE"))
+
+justairbnmsoa<-hold[[3]]%>%
+  dplyr::select(MSOA11CD, working_pop)%>%
+  st_drop_geometry()%>%
+  distinct(MSOA11CD, working_pop)%>%
+  left_join(boroughsandwardssf[[3]], .,
+            by = c("MSOA11CD" = "MSOA11CD"))
+
+qtm(justairbnward, fill = "airbnbs")
+
+censusmsoa<-
+  dplyr::select(MSOA11CD, working_pop)%>%
+  distinct(MSOA11CD, working_pop)%>%
+  left_join(boroughsandwardssf[[3]], .,
+            by = c("MSOA11CD" = "MSOA11CD"))
+
+qtm(justairbnward, fill = "airbnbs")
+
+
+
+

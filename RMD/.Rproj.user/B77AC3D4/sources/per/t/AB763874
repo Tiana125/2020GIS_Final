@@ -1,0 +1,32 @@
+{
+    "id": "AB763874",
+    "path": null,
+    "project_path": null,
+    "type": "r_dataframe",
+    "hash": "0",
+    "contents": "",
+    "dirty": false,
+    "created": 1608743851275.0,
+    "source_on_save": false,
+    "relative_order": 7,
+    "properties": {
+        "expression": "msoabounds",
+        "caption": "msoabounds",
+        "totalObservations": 983,
+        "displayedObservations": 983,
+        "variables": 13,
+        "cacheKey": "7D7F1AAE",
+        "object": "msoabounds",
+        "environment": "",
+        "contentUrl": "grid_resource/gridviewer.html?env=&obj=msoabounds&cache_key=7D7F1AAE&max_cols=50",
+        "preview": 0
+    },
+    "folds": "",
+    "lastKnownWriteTime": 1608743829,
+    "encoding": "",
+    "collab_server": "",
+    "source_window": "",
+    "last_content_update": 1608743851275,
+    "read_only": false,
+    "read_only_alternatives": []
+}
