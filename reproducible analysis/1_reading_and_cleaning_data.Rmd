@@ -1,0 +1,351 @@
+---
+title: "Reproducible Analysis for CASA0005 Final Project"
+author: "Yichen Tian"
+date: "27/12/2020"
+output:
+  html_document:
+    theme: yeti
+    smart: true
+    highlight: textmate
+    toc: true
+    number_sections: true
+    toc_float:
+      collapsed: false
+      smooth_scroll: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+```
+
+
+# Load libraries
+
+```{r echo=TRUE}
+library(sp)
+library(spatstat)
+library(here)
+library(rgeos)
+library(maptools)
+library(GISTools)
+library(tmap)
+library(sf)
+library(geojson)
+library(geojsonio)
+library(tmaptools)
+library(tidyverse)
+library(fs)
+library(stringr)
+library(tigris)
+library(raster)
+library(grid)
+library(ggplot2)
+library(magrittr)
+library(RColorBrewer)
+library(viridis)
+library(fpc)
+library(dbscan)
+library(OpenStreetMap)
+library(factoextra)
+library(tidymodels)
+library(caret)
+```
+
+# Preliminary analysis:
+## Descrptive Analysis - Distribution of data
+
+We slice the data to four periods of time and plot them to see the distribution of their densities. 
+
+```{r}
+msoabounds <- st_read(here::here("../../bigData", 
+                                "statistical-gis-boundaries-london",
+                                "ESRI",
+                                "MSOA_2011_London_gen_MHW.shp"))%>%
+  st_transform(., 27700)
+                      
+pop <- read_csv('land-area-population-density-lsoa11-msoa11.csv')
+#https://data.london.gov.uk/dataset/super-output-area-population-lsoa-msoa-london
+msoapop <- geo_join(msoabounds,pop,'MSOA11CD','MSOA11CD')
+
+census <- read_csv("msoadata.csv")
+msoacensus <- geo_join(msoabounds,census,'MSOA11CD','MSOA11CD')
+
+tweet1222 <- st_read(here::here("../data/1222data.csv")) %>%
+  st_as_sf(., coords = c("long", "lat"), 
+           crs = 4326)%>%
+  st_transform(., 27700)
+
+tweet1222 <- tweet1222[msoabounds,]
+tweet1222_latepeak <- tweet1222 %>% slice(1:152,1792:1991)
+tweet1222_home <- tweet1222 %>% slice(153:849)
+tweet1222_mornpeak <- tweet1222 %>% slice(850:1078)
+tweet1222_work <- tweet1222 %>% slice(1079:1792)
+
+dist_1222tw <- data.frame(c('morning peak', 'workplace', 'evening peak', 'home'),
+                       c(nrow(tweet1222_mornpeak), nrow(tweet1222_work), 
+                         nrow(tweet1222_latepeak), nrow(tweet1222_home)))
+colnames(dist_1222tw) <-c('period', 'number_of_tweets')
+dist_1222tw$timespan <- c(3,6.5,3,11.5)
+dist_1222tw %<>% mutate(density=number_of_tweets/timespan)
+
+dist_1222tw$x <- c(1.5,6.5,11.5,19)
+x_tick <- c(0, length(dist_1222tw$x)) + 0.5
+len <- length(x_tick)
+ggplot(dist_1222tw, aes(x = x, y = density,width=timespan)) + 
+  ggtitle("Distribution of number of geo-tagged tweets \nsent per hour") +
+  xlab("Time") + ylab("Density of tweets") +
+  geom_col(position = "dodge") +
+  ylim(0,150) +
+  geom_text(data=dist_1222tw, 
+            aes(label=round(density)), 
+            position = position_dodge(width=dist_1222tw$timespan),
+            vjust=-0.3, size=5) +
+  scale_x_continuous(breaks = c(0,3.15,9.9,13.15,24.85),
+                     labels = c('0'='6:30','3.15'='9:30',
+                                 '9.9'='16:00', '13.15'='19:00', '24.85'='6:30\nnext day')) 
+```
+
+
+```{r}
+tmplot_tweets <- function(whichtweet){
+  
+  tweetineachmsoa <- msoapop%>%
+    st_join(whichtweet)%>%
+    add_count(MSOA11NM)%>%
+    #then density of the points per ward
+    mutate(density=n/population)%>%
+    #select density and some other variables 
+    dplyr::select(density, MSOA11NM, MSOA11CD, n)
+  
+  tweetineachmsoa<- tweetineachmsoa %>%                    
+    group_by(MSOA11CD) %>%         
+    summarise(density = first(density),
+              wardname= first(MSOA11NM),
+              tweetcount= first(n))
+  
+  t <- tm_shape(tweetineachmsoa) +
+    tm_polygons("density",
+                style="jenks",legend.hist = TRUE,
+                palette=c('#ffffcc', '#a1dab4', '#41b6c4', '#2c7fb8', '#253494'),
+                midpoint=NA,
+                popup.vars=c("wardname", "density"),
+                title="Tweet Density")
+}
+```
+
+
+```{r}
+tmap_all_1222 <- tmplot_tweets(tweet1222)
+tmap_home_1222 <- tmplot_tweets(tweet1222_home)
+tmap_work_1222 <- tmplot_tweets(tweet1222_work)
+tmap_mornpeak_1222 <- tmplot_tweets(tweet1222_mornpeak)
+tmap_latepeak_1222 <- tmplot_tweets(tweet1222_latepeak)
+
+
+tm_shape(msoabounds) +
+  tm_polygons(col = NA, alpha = 0.5) +
+  tm_shape(tweet1222) +
+  tm_dots(col = "blue")
+```
+
+```{r}
+msoatweetsSub<- tweet1222 %>%
+  as(., 'Spatial')
+
+window <- as.owin(msoabounds)
+
+msoatweetsSub.ppp <- ppp(x=msoatweetsSub@coords[,1],
+                          y=msoatweetsSub@coords[,2],
+                          window=window)
+msoatweetsSub.ppp %>%
+  plot(.,pch=16,cex=0.5, lwd=.1,
+       main="tweets in london")
+msoatweetsSub.ppp %>%
+  density(., sigma=500) %>%
+  plot()
+
+K <- msoatweetsSub.ppp %>%
+  Kest(., correction="border") %>%
+  plot()
+
+```
+
+
+
+```{r}
+msoatweetsSubpoints <- msoatweetsSub %>%
+  coordinates(.)%>%
+  as.data.frame()
+
+msoatweetsSubpointsmap <- ggplot(msoatweetsSubpoints, 
+                      aes(x=coords.x1,y=coords.x2))+
+  geom_point()+
+  coord_equal()
+
+msoatweetsSubpointsmap
+msoatweetsSubpointsmap+stat_density2d(aes(fill = ..level..), geom="polygon")
+
+msoatweetsSubpointsmap<-ggplot(msoatweetsSubpoints, 
+                    aes(x=coords.x1,y=coords.x2))+
+  stat_bin2d(bins=10)
+
+msoatweetsSubpointsmap
+
+```
+
+
+
+```{r}
+kmeanstweets <- kmeans(msoatweetsSubpoints, centers = 5)
+fviz_cluster(kmeanstweets, data = msoatweetsSubpoints)
+
+```
+
+
+
+
+```{r}
+# Split the data:
+indxTrain <- createDataPartition(y = msoatweetsSubpoints$coords.x2,
+                                 p = 0.75,list = FALSE)
+training <- msoatweetsSubpoints[indxTrain,]
+testing <- msoatweetsSubpoints[-indxTrain,]
+
+# Run k-NN:
+set.seed(400)
+ctrl <- trainControl(method="repeatedcv", number=10, repeats=5)
+knnFit <- train(coords.x1 ~ ., data = training, method = "knn", trControl = ctrl, preProcess = c("center","scale"),tuneLength = 20)
+knnFit
+
+#Use plots to see optimal number of clusters:
+#Plotting yields Number of Neighbours Vs accuracy (based on repeated cross validation)
+plot(knnFit,xlim=c(1,50))
+```
+
+
+
+
+
+```{r}
+msoatweetsSubpoints <- msoatweetsSub %>%
+  coordinates(.)%>%
+  as.data.frame()
+
+db <- msoatweetsSubpoints %>%
+  fpc::dbscan(.,eps = 150, MinPts = 7)
+
+#now plot the results
+plot(db, msoatweetsSubpoints, main = "DBSCAN Output", frame = F)
+plot(msoabounds$geometry, add=TRUE)
+
+kNNdistplot(msoatweetsSubpoints,k=5)+
+abline(h=150, col = "red", lty=2)
+msoatweetsSubpoints<- msoatweetsSubpoints %>%
+  mutate(dbcluster=db$cluster)
+
+chulls <- msoatweetsSubpoints %>%
+  group_by(dbcluster) %>%
+  dplyr::mutate(hull = 1:n(),
+                hull = factor(hull, chull(coords.x1, coords.x2)))%>%
+  arrange(hull)
+
+chulls <- chulls %>%
+  filter(dbcluster >=1)
+
+dbplot <- ggplot(data=msoatweetsSubpoints, 
+                 aes(coords.x1,coords.x2, colour=dbcluster, fill=dbcluster)) 
+#add the points in
+dbplot <- dbplot + geom_point()
+#now the convex hulls
+dbplot <- dbplot + geom_polygon(data = chulls, 
+                                aes(coords.x1,coords.x2, group=dbcluster), 
+                                alpha = 0.5) 
+#now plot, setting the coordinates to scale correctly and as a black and white plot 
+#(just for the hell of it)...
+dbplot + theme_bw() + coord_equal()
+
+msoabb <- msoabounds %>%
+  st_transform(., 4326)%>%
+  st_bbox()
+
+basemap <- OpenStreetMap::openmap(c(51.28,-0.489),c(51.686,0.236),
+                         zoom=NULL,
+                         "stamen-toner")
+
+  # convert the basemap to British National Grid
+basemap_bng <- openproj(basemap, projection="+init=epsg:27700")
+
+autoplot.OpenStreetMap(basemap_bng) + 
+  geom_point(data=msoatweetsSubpoints, 
+             aes(coords.x1,coords.x2, 
+                 colour=dbcluster, 
+                 fill=dbcluster)) + 
+  geom_polygon(data = chulls, 
+               aes(coords.x1,coords.x2, 
+                   group=dbcluster,
+                   fill=dbcluster), 
+               alpha = 0.5)  
+
+```
+
+
+
+```{r}
+opt <- msoatweetsSubpoints %>%
+  dbscan::optics(.,eps = 150, minPts = 7)
+
+plot(opt)
+
+reach <- as.reachability(opt)
+#Avg minimum reachability distance: 84.89076
+
+opt <- extractDBSCAN(opt, eps_cl = 85)
+plot(opt)
+
+msoatweetsSubpoints<- msoatweetsSubpoints %>%
+  mutate(optcluster=opt$cluster)
+
+hullplot(msoatweetsSubpoints, opt, frame = F)
+plot(msoabounds$geometry, add=TRUE)
+
+
+optplot <- ggplot(data=msoatweetsSubpoints, 
+                 aes(coords.x1,coords.x2, colour=opt$cluster, fill=opt$cluster)) 
+#add the points in
+optplot <- optplot + geom_point()
+#now the convex hulls
+#optplot <- optplot + opthull
+#now plot, setting the coordinates to scale correctly and as a black and white plot 
+#(just for the hell of it)...
+optplot +  theme_bw() + coord_equal()
+
+
+optchulls <- msoatweetsSubpoints %>%
+  group_by(optcluster) %>%
+  dplyr::mutate(hull = 1:n(),
+                hull = factor(hull, chull(coords.x1, coords.x2)))%>%
+  arrange(hull)
+
+optchulls <- optchulls %>%
+  filter(optcluster >=1)
+
+
+autoplot.OpenStreetMap(basemap_bng) + 
+  geom_point(data=msoatweetsSubpoints, 
+             aes(coords.x1,coords.x2, 
+                 colour=optcluster, 
+                 fill=optcluster)) + 
+  geom_polygon(data = optchulls, 
+               aes(coords.x1,coords.x2, 
+                   group=optcluster,
+                   fill=optcluster), 
+               alpha = 0.5)  
+
+```
+
+
+
+```{r}
+
+```
+
