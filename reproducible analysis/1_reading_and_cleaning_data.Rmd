@@ -15,7 +15,7 @@ output:
 ---
 
 ```{r setup, include=FALSE}
-knitr::opts_chunk$set(echo = FALSE)
+knitr::opts_chunk$set(echo = TRUE)
 ```
 
 
@@ -40,6 +40,7 @@ library(tigris)
 library(raster)
 library(grid)
 library(ggplot2)
+library(spdep)
 library(magrittr)
 library(RColorBrewer)
 library(viridis)
@@ -56,25 +57,47 @@ library(caret)
 
 We slice the data to four periods of time and plot them to see the distribution of their densities. 
 
+NOTE: Tweets data here is a random mock dataset, and it is only for demonstration purposes. 
+
 ```{r}
-msoabounds <- st_read(here::here("../../bigData", 
-                                "statistical-gis-boundaries-london",
-                                "ESRI",
-                                "MSOA_2011_London_gen_MHW.shp"))%>%
+####important###
+# if you have london MSOA shp file 
+# please dont run the following lines
+# as it will download the zip file here at your wd
+# and navigate to the shp we want
+# instead run the commented out lines that begins with msoabounds
+temp <- tempfile()
+temp2 <- tempfile()
+download.file("https://data.london.gov.uk/download/statistical-gis-boundary-files-london/9ba8c833-6370-4b11-abdc-314aa020d5e0/statistical-gis-boundaries-london.zip",temp)
+unzip(zipfile = temp, exdir = temp2)
+
+msoabounds<-st_read(file.path(temp2,"statistical-gis-boundaries-london","ESRI","MSOA_2011_London_gen_MHW.shp" ))%>%
   st_transform(., 27700)
+unlink(c(temp, temp2))
+
+
+#msoabounds <- st_read(here::here("../../bigData", 
+#                               "statistical-gis-boundaries-london",
+#                                "ESRI",
+#                                "MSOA_2011_London_gen_MHW.shp"))%>%
+#  st_transform(., 27700)
                       
-pop <- read_csv('land-area-population-density-lsoa11-msoa11.csv')
-#https://data.london.gov.uk/dataset/super-output-area-population-lsoa-msoa-london
+pop <- read_csv('https://github.com/Tiana125/2020GIS_Final/raw/main/reproducible%20analysis/land-area-population-density-lsoa11-msoa11.csv')
+
 msoapop <- geo_join(msoabounds,pop,'MSOA11CD','MSOA11CD')
 
-census <- read_csv("msoadata.csv")
+census <- read_csv("https://github.com/Tiana125/2020GIS_Final/raw/main/RMD/msoadata.csv")
 msoacensus <- geo_join(msoabounds,census,'MSOA11CD','MSOA11CD')
 
-tweet1222 <- st_read(here::here("../data/1222data.csv")) %>%
+msoacensus <- msoacensus%>%
+  mutate(workpop_density=working_pop/msoapop$population)
+
+tweet1222 <- st_read('https://github.com/Tiana125/2020GIS_Final/raw/main/1222data_mock.csv') %>%
   st_as_sf(., coords = c("long", "lat"), 
            crs = 4326)%>%
   st_transform(., 27700)
 
+# the following code is used for the real data
 tweet1222 <- tweet1222[msoabounds,]
 tweet1222_latepeak <- tweet1222 %>% slice(1:152,1792:1991)
 tweet1222_home <- tweet1222 %>% slice(153:849)
@@ -92,7 +115,7 @@ dist_1222tw$x <- c(1.5,6.5,11.5,19)
 x_tick <- c(0, length(dist_1222tw$x)) + 0.5
 len <- length(x_tick)
 ggplot(dist_1222tw, aes(x = x, y = density,width=timespan)) + 
-  ggtitle("Distribution of number of geo-tagged tweets \nsent per hour") +
+#  ggtitle("Distribution of number of geo-tagged tweets #\nsent per hour") +
   xlab("Time") + ylab("Density of tweets") +
   geom_col(position = "dodge") +
   ylim(0,150) +
@@ -108,7 +131,6 @@ ggplot(dist_1222tw, aes(x = x, y = density,width=timespan)) +
 
 ```{r}
 tmplot_tweets <- function(whichtweet){
-  
   tweetineachmsoa <- msoapop%>%
     st_join(whichtweet)%>%
     add_count(MSOA11NM)%>%
@@ -124,29 +146,334 @@ tmplot_tweets <- function(whichtweet){
               tweetcount= first(n))
   
   t <- tm_shape(tweetineachmsoa) +
+    tm_borders(lwd=.1)+
     tm_polygons("density",
-                style="jenks",legend.hist = TRUE,
+                style="jenks",
                 palette=c('#ffffcc', '#a1dab4', '#41b6c4', '#2c7fb8', '#253494'),
                 midpoint=NA,
                 popup.vars=c("wardname", "density"),
-                title="Tweet Density")
+                title="Tweet Density") 
+    
 }
-```
 
-
-```{r}
 tmap_all_1222 <- tmplot_tweets(tweet1222)
 tmap_home_1222 <- tmplot_tweets(tweet1222_home)
 tmap_work_1222 <- tmplot_tweets(tweet1222_work)
 tmap_mornpeak_1222 <- tmplot_tweets(tweet1222_mornpeak)
 tmap_latepeak_1222 <- tmplot_tweets(tweet1222_latepeak)
 
-
 tm_shape(msoabounds) +
   tm_polygons(col = NA, alpha = 0.5) +
   tm_shape(tweet1222) +
   tm_dots(col = "blue")
+
 ```
+
+
+
+
+```{r}
+
+tweetineachmsoa <- msoapop%>%
+  st_join(tweet1222)%>%
+  add_count(MSOA11NM)%>%
+  #calculate area
+  #then density of the points per ward
+  mutate(density=n/population)%>%
+  #select density and some other variables 
+  dplyr::select(density, MSOA11NM, MSOA11CD, n)
+
+tweetineachmsoa<- tweetineachmsoa %>%                    
+  group_by(MSOA11CD) %>%         
+  summarise(density = first(density),
+            wardname= first(MSOA11NM),
+            tweetcount= first(n))
+
+tmap_mode("plot")
+tm_work <- tm_shape(msoacensus) + 
+  tm_borders(lwd=.1)+
+  tm_polygons("workpop_density",style = "jenks") +
+  tm_layout(frame=FALSE,legend.outside = TRUE)+
+  tm_credits("density of people in work", position=c(0,0.85), size=1)
+
+tm_res <- tm_shape(msoacensus) + 
+  tm_polygons("resident_num",style = "jenks") +
+  tm_layout(frame=FALSE,legend.outside = TRUE)+
+  tm_credits("(a2)", position=c(0,0.85), size=1.5)
+
+tm_tweet <- tmap_all_1222 +
+  tm_layout(frame=FALSE,legend.outside = TRUE)+
+  tm_credits("tweet density across all users", position=c(0,0.85), size=1)
+
+tmap_home_1222 <- tmap_home_1222 +
+  tm_layout(frame=FALSE,legend.outside = TRUE)+
+  tm_credits("tweet density from 19:00-6:00", position=c(0,0.85), size=1)
+
+    #main.title= 'Density of tweets sent from home', 
+            #main.title.position = c('center', 'top'), frame=FALSE,
+            #legend.hist.width = 0.6,legend.hist.height = .3,
+            #legend.outside.position = "right", legend.outside.size = 0.3,
+            #legend.outside = TRUE)
+#  tm_credits("()", position=c(0,0), size=1)
+
+tmap_work_1222 <- tmap_work_1222 +
+  tm_layout(frame=FALSE,legend.outside = TRUE)+
+  tm_borders(col="grey",lwd=.1)+
+  tm_credits("tweet density from 9:30-16:00", position=c(0,0.85), size=1)
+
+tmap_mornpeak_1222 <- tmap_mornpeak_1222 +
+  tm_layout(frame=FALSE,legend.outside = TRUE)+
+  tm_credits("tweet density during 6:30-9:30", position=c(0,0.85), size=1)
+
+tmap_latepeak_1222 <- tmap_latepeak_1222 +
+  tm_layout(frame=FALSE,legend.outside = TRUE)+
+  tm_credits("tweet density during 16:00-19:00", position=c(0,0.85), size=1)
+
+alltweetsmap=tmap_arrange(tm_tweet, tmap_mornpeak_1222,tmap_work_1222,
+                          tmap_latepeak_1222,
+                          tmap_home_1222, tm_work, ncol=2)
+alltweetsmap
+
+```
+
+
+```{r}
+tweetineachmsoa_work <- msoapop%>%
+  st_join(tweet1222_work)%>%
+  add_count(MSOA11NM)%>%
+  #calculate area
+  #then density of the points per ward
+  mutate(density=n/population)%>%
+  #select density and some other variables 
+  dplyr::select(density, MSOA11NM, MSOA11CD, n) %>%
+  group_by(MSOA11CD) %>%         
+  summarise(density = first(density),
+            wardname= first(MSOA11NM),
+            tweetcount= first(n))
+
+tweetineachmsoa_home <- msoapop%>%
+  st_join(tweet1222_home)%>%
+  add_count(MSOA11NM)%>%
+  #calculate area
+  #then density of the points per ward
+  mutate(density=n/population)%>%
+  #select density and some other variables 
+  dplyr::select(density, MSOA11NM, MSOA11CD, n) %>%
+  group_by(MSOA11CD) %>%         
+  summarise(density = first(density),
+            wardname= first(MSOA11NM),
+            tweetcount= first(n))
+
+
+tweetineachmsoa_latepeak <- msoapop%>%
+  st_join(tweet1222_latepeak)%>%
+  add_count(MSOA11NM)%>%
+  #calculate area
+  #then density of the points per ward
+  mutate(density=n/population)%>%
+  #select density and some other variables 
+  dplyr::select(density, MSOA11NM, MSOA11CD, n) %>%
+  group_by(MSOA11CD) %>%         
+  summarise(density = first(density),
+            wardname= first(MSOA11NM),
+            tweetcount= first(n))
+
+
+tweetineachmsoa_mornpeak <- msoapop%>%
+  st_join(tweet1222_mornpeak)%>%
+  add_count(MSOA11NM)%>%
+  #calculate area
+  #then density of the points per ward
+  mutate(density=n/population)%>%
+  #select density and some other variables 
+  dplyr::select(density, MSOA11NM, MSOA11CD, n) %>%
+  group_by(MSOA11CD) %>%         
+  summarise(density = first(density),
+            wardname= first(MSOA11NM),
+            tweetcount= first(n))
+
+
+```
+
+# Spatial Autocorrelation Statistics
+
+```{r morans I on tweets}
+coordsmsoa <- msoabounds%>%
+  st_centroid()%>%
+  st_geometry()
+  
+plot(coordsmsoa,axes=TRUE)
+
+msoa_nb <- msoabounds %>%
+  poly2nb(., queen=TRUE,snap=1)
+
+#plot them
+plot(msoa_nb, st_geometry(msoabounds), col="red")
+#add a map underneath
+plot(tweetineachmsoa$geometry, border = "grey",add=T)
+
+Lmsoa.lw <- msoa_nb %>%
+  nb2listw(., style="C")
+
+I_Lmsoa_Global_Density <- tweetineachmsoa %>%
+  pull(density) %>%
+  as.vector()%>%
+  moran.test(., Lmsoa.lw)
+
+I_Lmsoa_Global_Density 
+
+C_Lmsoa_Global_Density <- tweetineachmsoa %>%
+  pull(density) %>%
+  as.vector()%>%
+  geary.test(., Lmsoa.lw)
+
+C_Lmsoa_Global_Density 
+
+G_Lmsoa_Global_Density <- tweetineachmsoa %>%
+  pull(density) %>%
+  as.vector()%>%
+  globalG.test(., Lmsoa.lw) 
+
+G_Lmsoa_Global_Density #greater, high values are tending to cluster.
+
+#use the localmoran function to generate I for each ward in the city
+I_Lmsoa_Local_count <- tweetineachmsoa %>%
+  pull(tweetcount) %>%
+  as.vector()%>%
+  localmoran(., Lmsoa.lw)%>%
+  as_tibble()
+
+I_Lmsoa_Local_Density <- tweetineachmsoa %>%
+  pull(density) %>%
+  as.vector()%>%
+  localmoran(., Lmsoa.lw)%>%
+  as_tibble()
+
+#what does the output (the localMoran object) look like?
+slice_head(I_Lmsoa_Local_Density, n=5)
+
+tweetineachmsoa <- tweetineachmsoa %>%
+  mutate(tweet_count_I = as.numeric(I_Lmsoa_Local_count$Ii))%>%
+  mutate(tweet_count_Iz =as.numeric(I_Lmsoa_Local_count$Z.Ii))%>%
+  mutate(density_I =as.numeric(I_Lmsoa_Local_Density$Ii))%>%
+  mutate(density_Iz =as.numeric(I_Lmsoa_Local_Density$Z.Ii))
+
+breaks1<-c(-1000,-2.58,-1.96,-1.65,1.65,1.96,2.58,1000)
+MoranColours<- rev(brewer.pal(8, "RdGy"))
+
+tmap_mode('view')
+tm_shape(tweetineachmsoa) +
+    tm_polygons("tweet_count_Iz",
+        style="fixed",
+        breaks=breaks1,
+        palette=MoranColours,
+        midpoint=NA,
+        title="Local Moran's I, Tweets in London")
+
+Gi_Lmsoa_Local_Density <- tweetineachmsoa %>%
+  pull(density) %>%
+  as.vector()%>%
+  localG(., Lmsoa.lw)
+
+tweetineachmsoa <- tweetineachmsoa %>%
+  mutate(density_G = as.numeric(Gi_Lmsoa_Local_Density))
+
+GIColours<- rev(brewer.pal(8, "RdBu"))
+
+#now plot on an interactive map
+tm_shape(tweetineachmsoa) +
+    tm_polygons("density_G",
+        style="fixed",
+        breaks=breaks1,
+        palette=GIColours,
+        midpoint=NA,
+        title="Gi*, Tweets in London")
+
+
+```
+
+
+
+```{r morans I working_pop}
+
+I_Lmsoa_Global_Density_workpop <- msoacensus %>%
+  pull(workpop_density) %>%
+  as.vector()%>%
+  moran.test(., Lmsoa.lw)
+
+I_Lmsoa_Global_Density_workpop #greater, 0.4195210731   
+
+C_Lmsoa_Global_Density_workpop <- msoacensus %>%
+  pull(workpop_density) %>%
+  as.vector()%>%
+  geary.test(., Lmsoa.lw)
+
+C_Lmsoa_Global_Density_workpop # 1.06788251, negative spatial autocorrelation or dissimilar values clustering, NO
+
+G_Lmsoa_Global_Density_workpop <- msoacensus %>%
+  pull(workpop_density) %>%
+  as.vector()%>%
+  globalG.test(., Lmsoa.lw) 
+
+G_Lmsoa_Global_Density_workpop #greater, high values are tending to cluster.
+
+#use the localmoran function to generate I for each ward in the city
+I_Lmsoa_Local_count_workpop <- msoacensus %>%
+  pull(working_pop) %>%
+  as.vector()%>%
+  localmoran(., Lmsoa.lw)%>%
+  as_tibble()
+
+I_Lmsoa_Local_Density_workpop <- msoacensus %>%
+  pull(workpop_density) %>%
+  as.vector()%>%
+  localmoran(., Lmsoa.lw)%>%
+  as_tibble()
+
+#what does the output (the localMoran object) look like?
+slice_head(I_Lmsoa_Local_Density_workpop, n=5)
+
+msoacensus <- msoacensus %>%
+  mutate(workpop_count_I_workpop = as.numeric(I_Lmsoa_Local_count_workpop$Ii))%>%
+  mutate(workpop_count_Iz =as.numeric(I_Lmsoa_Local_count_workpop$Z.Ii))%>%
+  mutate(workpop_density_I =as.numeric(I_Lmsoa_Local_Density_workpop$Ii))%>%
+  mutate(workpop_density_Iz =as.numeric(I_Lmsoa_Local_Density_workpop$Z.Ii))
+
+breaks1<-c(-1000,-2.58,-1.96,-1.65,1.65,1.96,2.58,1000)
+MoranColours<- rev(brewer.pal(8, "RdGy"))
+
+tmap_mode('view')
+tm_shape(msoacensus) +
+    tm_polygons("workpop_count_Iz",
+        style="fixed",
+        breaks=breaks1,
+        palette=MoranColours,
+        midpoint=NA,
+        title="Local Moran's I, working population in London")
+
+Gi_Lmsoa_Local_Density_workpop <- msoacensus %>%
+  pull(workpop_density) %>%
+  as.vector()%>%
+  localG(., Lmsoa.lw)
+
+msoacensus <- msoacensus %>%
+  mutate(workpop_density_G = as.numeric(Gi_Lmsoa_Local_Density_workpop))
+
+GIColours<- rev(brewer.pal(8, "RdBu"))
+
+#now plot on an interactive map
+tm_shape(msoacensus) +
+    tm_polygons("workpop_density_G",
+        style="fixed",
+        breaks=breaks1,
+        palette=GIColours,
+        midpoint=NA,
+        title="Gi*, working population in London")
+```
+
+
+
+
 
 ```{r}
 msoatweetsSub<- tweet1222 %>%
@@ -193,15 +520,15 @@ msoatweetsSubpointsmap
 
 ```
 
+Below shows kmeans clustering, numbers of clusters chose arbitrarily. (Results won't be included in paper. )
 
-
-```{r}
+```{r kmeans}
 kmeanstweets <- kmeans(msoatweetsSubpoints, centers = 5)
 fviz_cluster(kmeanstweets, data = msoatweetsSubpoints)
 
 ```
 
-
+# Removing outliers using DBSCAN and OPTICS
 
 
 ```{r}
@@ -218,28 +545,27 @@ knnFit <- train(coords.x1 ~ ., data = training, method = "knn", trControl = ctrl
 knnFit
 
 #Use plots to see optimal number of clusters:
-#Plotting yields Number of Neighbours Vs accuracy (based on repeated cross validation)
 plot(knnFit,xlim=c(1,50))
 ```
 
 
 
 
-
-```{r}
+All tweets in London, DBSCAN analysis. 
+```{r DBSCAN all tweets}
 msoatweetsSubpoints <- msoatweetsSub %>%
   coordinates(.)%>%
   as.data.frame()
 
 db <- msoatweetsSubpoints %>%
-  fpc::dbscan(.,eps = 150, MinPts = 7)
+  fpc::dbscan(.,eps = 1600, MinPts = 7)
 
 #now plot the results
 plot(db, msoatweetsSubpoints, main = "DBSCAN Output", frame = F)
 plot(msoabounds$geometry, add=TRUE)
 
 kNNdistplot(msoatweetsSubpoints,k=5)+
-abline(h=150, col = "red", lty=2)
+abline(h=1600, col = "red", lty=2)
 msoatweetsSubpoints<- msoatweetsSubpoints %>%
   mutate(dbcluster=db$cluster)
 
@@ -261,7 +587,6 @@ dbplot <- dbplot + geom_polygon(data = chulls,
                                 aes(coords.x1,coords.x2, group=dbcluster), 
                                 alpha = 0.5) 
 #now plot, setting the coordinates to scale correctly and as a black and white plot 
-#(just for the hell of it)...
 dbplot + theme_bw() + coord_equal()
 
 msoabb <- msoabounds %>%
@@ -286,39 +611,83 @@ autoplot.OpenStreetMap(basemap_bng) +
                    fill=dbcluster), 
                alpha = 0.5)  
 
+tweets_noisefree <- msoatweetsSubpoints[!(msoatweetsSubpoints$dbcluster==0),]
+
+ggplot(data=tweets_noisefree, 
+       aes(coords.x1,coords.x2, colour=dbcluster, fill=dbcluster)) +
+  geom_point()
+
+tweets_noisefree_xy <- tweets_noisefree %>%
+  st_as_sf(coords = c("coords.x1", "coords.x2"), crs = 27700)
+
+tm_shape(msoabounds) +
+  tm_polygons(col = NA, alpha = 0.5) +
+  tm_shape(tweets_noisefree_xy) +
+  tm_dots(col = "blue")
+
+crs(tweets_noisefree_xy)
+tweetineachmsoa_work_noisefree <- msoapop%>%
+  st_join(tweets_noisefree_xy)%>%
+  add_count(MSOA11NM)%>%
+  #calculate area
+  #then density of the points per ward
+  mutate(density=n/population)%>%
+  #select density and some other variables 
+  dplyr::select(density, MSOA11NM, MSOA11CD, n) %>%
+  group_by(MSOA11CD) %>%         
+  summarise(density = first(density),
+            wardname= first(MSOA11NM),
+            tweetcount= first(n))
+
+t_noisefree <- tm_shape(tweetineachmsoa_work_noisefree) +
+    tm_polygons("density",
+                style="jenks",legend.hist = TRUE,
+                palette=c('#ffffcc', '#a1dab4', '#41b6c4', '#2c7fb8', '#253494'),
+                midpoint=NA,
+                popup.vars=c("wardname", "density"),
+                title="Tweet Density")
+
+```
+
+
+```{r}
+#tweetineachmsoa <- msoapop%>%
+#    st_join(whichtweet)%>%
+#    add_count(MSOA11NM)%>%
+    #then density of the points per ward
+#    mutate(density=n/population)%>%
+    #select density and some other variables 
+#    dplyr::select(density, MSOA11NM, MSOA11CD, n)
+
+msoatweetsSubpoints <- msoatweetsSubpoints%>%
+  add_count(dbcluster)%>%
+  mutate(numincluster=n)%>%
+  dplyr::select(coords.x1,coords.x2,dbcluster,numincluster)
+
+max(msoatweetsSubpoints$dbcluster)
 ```
 
 
 
-```{r}
+
+```{r all tweets OPTICS}
 opt <- msoatweetsSubpoints %>%
-  dbscan::optics(.,eps = 150, minPts = 7)
+  dbscan::optics(.,eps=1400, minPts = 7)
 
 plot(opt)
 
 reach <- as.reachability(opt)
-#Avg minimum reachability distance: 84.89076
+#Avg minimum reachability distance: 359.4764
 
-opt <- extractDBSCAN(opt, eps_cl = 85)
+opt <- extractDBSCAN(opt, eps_cl = 360)
 plot(opt)
 
-msoatweetsSubpoints<- msoatweetsSubpoints %>%
-  mutate(optcluster=opt$cluster)
 
 hullplot(msoatweetsSubpoints, opt, frame = F)
 plot(msoabounds$geometry, add=TRUE)
 
-
-optplot <- ggplot(data=msoatweetsSubpoints, 
-                 aes(coords.x1,coords.x2, colour=opt$cluster, fill=opt$cluster)) 
-#add the points in
-optplot <- optplot + geom_point()
-#now the convex hulls
-#optplot <- optplot + opthull
-#now plot, setting the coordinates to scale correctly and as a black and white plot 
-#(just for the hell of it)...
-optplot +  theme_bw() + coord_equal()
-
+msoatweetsSubpoints<- msoatweetsSubpoints %>%
+  dplyr::mutate(optcluster=opt$cluster)
 
 optchulls <- msoatweetsSubpoints %>%
   group_by(optcluster) %>%
@@ -328,6 +697,21 @@ optchulls <- msoatweetsSubpoints %>%
 
 optchulls <- optchulls %>%
   filter(optcluster >=1)
+
+optplot <- ggplot(data=msoatweetsSubpoints, 
+                 aes(coords.x1,coords.x2, colour=optcluster, fill=optcluster))
+
+
+#add the points in
+#optplot <- optplot + geom_point()
+#now the convex hulls
+optplot <- optplot + geom_polygon(data = optchulls, 
+                                aes(coords.x1,coords.x2, group=dbcluster), 
+                                alpha = 0.5) 
+
+#now plot, setting the coordinates to scale correctly and as a black and white plot 
+
+optplot +  theme_bw() + coord_equal()
 
 
 autoplot.OpenStreetMap(basemap_bng) + 
@@ -341,11 +725,177 @@ autoplot.OpenStreetMap(basemap_bng) +
                    fill=optcluster), 
                alpha = 0.5)  
 
+msoatweetsSubpoints <- msoatweetsSubpoints%>%
+  add_count(optcluster)%>%
+  mutate(numinoptcluster=n)%>%
+  dplyr::select(coords.x1,coords.x2,dbcluster,numincluster,optcluster, numinoptcluster)
+
+tweets_noisefree_opt <- msoatweetsSubpoints[!(msoatweetsSubpoints$optcluster==0),]
+
+tweets_noisefree_opt_xy <- tweets_noisefree_opt %>%
+  st_as_sf(coords = c("coords.x1", "coords.x2"), crs = 27700)
+tmap_mode('plot')
+tm_shape(msoabounds) +
+  tm_polygons(col = NA, alpha = 0.5) +
+  tm_shape(tweets_noisefree_xy) +
+  tm_dots(col = "blue")
+
+tweetineachmsoa_work_noisefree_opt <- msoapop%>%
+  st_join(tweets_noisefree_xy)%>%
+  add_count(MSOA11NM)%>%
+  #calculate area
+  #then density of the points per ward
+  mutate(density=n/population)%>%
+  #select density and some other variables 
+  dplyr::select(density, MSOA11NM, MSOA11CD, n) %>%
+  group_by(MSOA11CD) %>%         
+  summarise(density = first(density),
+            wardname= first(MSOA11NM),
+            tweetcount= first(n))
+
 ```
 
+# Plotting and Residuals...
 
+```{r all tweets regression}
+#plottw <- tweets_noisefree_opt%>%
+#  dplyr::select('MSOA11CD', 'density') 
+plottw <- tweetineachmsoa_work_noisefree_opt%>%
+  dplyr::select('MSOA11CD', 'density') 
+
+plotcen <- msoacensus%>%
+  dplyr::select('MSOA11CD', 'workpop_density') 
+
+plottog <-  inner_join(plottw %>% as.data.frame(), plotcen %>% as.data.frame(), by = "MSOA11CD")
+#plottog <- plottog %>% slice(2:983)
+                              
+hist(plottog$workpop_density, main=NULL,
+     xlab='density of people in work')
+
+library(corrr)
+
+Correlation <- plottog %>%
+  dplyr::select(workpop_density,
+                density)%>%
+    correlate() %>%
+  print()
+
+library(broom)
+linearMod <- lm(log(workpop_density) ~ 
+                  log(density), 
+                data=plottog)
+
+tidy(linearMod)
+
+plottog <- plottog %>%
+  mutate(log_density=log(density))%>%
+  mutate(log_workpop_density=log(workpop_density))
+
+
+q <- qplot(x = `log_density`, 
+           y = `log_workpop_density`, 
+           data=plottog)
+q + stat_smooth(method="lm", se=FALSE, size=1) + 
+  geom_jitter()
+
+summary(linearMod)
+
+ggplot(plottog, aes(x=log(density), y=log(workpop_density)))+
+  geom_point()
+
+model_data <- linearMod %>%
+  augment(., plottog)
+
+model_data%>%
+dplyr::select(.resid)%>%
+  pull()%>%
+  qplot()+ 
+  geom_histogram()+xlim(-4,4) +xlab('residuals')+ylab('count')
+
+library(olsrr)
+ols_plot_resid_qq(linearMod)
+ols_test_normality(linearMod)
+ols_test_correlation(linearMod)
+
+par(mfrow=c(2,2))
+plot(linearMod)
+
+
+library(car)
+
+boxcox_trans(~workpop_density, 
+       plottog)
+symbox(~workpop_density, 
+       plottog, 
+       na.rm=T,
+       powers=seq(-3,3,by=.5))
+symbox(~density, 
+       plottog, 
+       na.rm=T,
+       powers=seq(-3,3,by=.5))
+
+ggplot(plottog, aes(x=(workpop_density)^-1)) + 
+  geom_histogram()
+ggplot(plottog, aes(x=log(workpop_density))) + 
+  geom_histogram() #better
+
+ggplot(plottog, aes(x=(density)^-1)) + 
+  geom_histogram() #better
+ggplot(plottog, aes(x=log(density))) + 
+  geom_histogram()
+
+
+
+b <- boxcox(plottog$density ~ plottog$workpop_density)
+
+
+
+```
 
 ```{r}
 
+
+msoabounds <- msoabounds %>%
+  mutate(model_final_res = residuals(linearMod))
+
+par(mfrow=c(2,2))
+plot(linearMod)
+
+qtm(msoabounds, fill = "model_final_res")
+library(spgwr)
+msoaboundsSP <- msoabounds %>%
+  as(., "Spatial")
+coordsmsoaSP <- coordsmsoa %>%
+  as(., "Spatial")
+
+GWRbandwidth <- gwr.sel(log(plottog$workpop_density) ~ log(plottog$density),
+                  data = msoaboundsSP, 
+                        coords=coordsmsoaSP,
+                        adapt=T)
+
+#run the gwr model
+gwr.model = gwr(log(plottog$workpop_density) ~ log(plottog$density),
+                  data = msoaboundsSP, 
+                coords=coordsmsoaSP, 
+                adapt=GWRbandwidth, 
+                hatmatrix=TRUE, 
+                se.fit=TRUE)
+gwr.model
+
+gwr.results <- as.data.frame(gwr.model$SDF)
+names(gwr.results)
+
+msoaboundsgwr <- msoabounds %>%
+  mutate(coefdensity = gwr.results$log.plottog.density.)
+tmap_mode('plot')
+tm_shape(msoaboundsgwr) +
+  tm_borders(lwd=.1)+
+  tm_polygons(col = "coefdensity", 
+              palette = "RdBu", 
+              alpha = 0.5)+
+
+  
+  tm_shape(tweets_noisefree_xy) +
+  tm_dots(col = "blue")
 ```
 
